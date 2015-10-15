@@ -1,6 +1,5 @@
 # Check the working directory with wd. If it is not the one where your data are located, change it with setwd.
 getwd()
-setwd("~/ownCloud/Trabajo/Docencia/2015 Intelligent Systems/R")
 
 library(tm)
 library(ggplot2)
