@@ -1,0 +1,315 @@
+---
+title: "Entity recognition using a Gazetteer"
+author: "OscarF"
+date: "October 27, 2015"
+output: html_document
+---
+
+```{r}
+
+# The goal of this document is to show a sample script for pattern-based entity recognition
+# over text documents using a gazetteer. It mainly uses the openNLP (natural language processing),
+# the tm (text mining) and the SPARQL packages in R.
+
+# I cannot claim full authorship of this document, since I have taken code snippets and have been 
+# inspired by multiple books and documents in the Web. Thanks everyone for sharing.
+
+# Check the working directory with wd. If it is not the one where your data are located, change it with setwd.
+getwd()
+
+# Now we load the required libraries. Only a couple of things to mention:
+
+# Using the annotate function of the openNLP package requires to explicitly include the package name 
+# (i.e., NLP::annotate) due to a name clash with ggplot2
+# Need to change the memory allocated to Java to avoid out-of-memory problems
+# Needed for OutOfMemoryError: Java heap space 
+library(rJava)
+.jinit(parameters="-Xmx4g")
+
+# If there are more memory problems, invoke gc() after the POS tagging
+
+library(NLP)
+library(openNLP) 
+library(openNLPmodels.en)
+library(tm)
+library(stringr)
+library(SPARQL)
+
+# getAnnotationsFromDocument returns annotations for the text document: word, sentence, and part-of-speech annotations.
+
+# As an alternative, the koRpus package uses TreeTagger for POS tagging.
+
+# Returns annotations for the text document: word, sentence, POS
+# As an alternative, the koRpus package uses TreeTagger for POS tagging
+getAnnotationsFromDocument = function(doc){
+  x=as.String(doc)
+  sent_token_annotator <- Maxent_Sent_Token_Annotator()
+  word_token_annotator <- Maxent_Word_Token_Annotator()
+  pos_tag_annotator <- Maxent_POS_Tag_Annotator()
+  y1 <- annotate(x, list(sent_token_annotator, word_token_annotator))
+  y2 <- annotate(x, pos_tag_annotator, y1)
+  return(y2)  
+} 
+
+# getAnnotatedMergedDocument returns the text document merged with the annotations.
+getAnnotatedMergedDocument = function(doc,annotations){
+  x=as.String(doc)
+  y2w <- subset(annotations, type == "word")
+  tags <- sapply(y2w$features, '[[', "POS")
+  r1 <- sprintf("%s/%s", x[y2w], tags)
+  r2 <- paste(r1, collapse = " ")
+  return(r2)  
+} 
+
+# getAnnotatedPlainTextDocument returns the text document along with its annotations in an AnnotatedPlainTextDocument.
+getAnnotatedPlainTextDocument = function(doc,annotations){
+  x=as.String(doc)
+  a = AnnotatedPlainTextDocument(x,annotations)
+  return(a)  
+} 
+
+# detectPatternOnDocument returns the pattern detected on an AnnotatedPlainTextDocument.
+detectPatternOnDocument <- function(doc, pattern) {
+  x=as.String(doc)
+  res=str_match(x,pattern)
+  
+  if (length(res)==1){
+    return (res)
+  } else {
+    if (all(is.na(res[,2:length(res)])))
+      return (NA)
+    else {
+      ret=list()
+      for (i in 2:length(res)){
+        ret = paste(ret,res[i])
+      }
+      return(ret)
+    }
+  }
+}
+
+# detectPatternsInCorpus returns a data frame with all the patterns detected in a corpus.
+detectPatternsInCorpus = function(corpus, patterns){
+  vallEntities <- data.frame(matrix(NA, ncol = length(patterns)+1, nrow = length(corpus)))
+  names(vallEntities) <- c("File",patterns)
+  for (i in 1:length(patterns)) {
+    vallEntities[,i+1]=unlist(lapply(corpus, detectPatternOnDocument, pattern=patterns[i]))
+  }
+  for (i in 1:length(corpus)) {
+    vallEntities$File[i]=meta(corpus[[i]])$id
+  }
+  return (vallEntities)  
+}
+
+# countMatchesPerColumn returns the number of matches per pattern/column.
+
+# Counts the number of columns with non-NA values for each pattern.
+countMatchesPerColumn = function (df) {
+  entityCountPerPattern <- data.frame(matrix(NA, ncol = 2, nrow = length(names(df))-1))
+  names(entityCountPerPattern) <- c("Entity","Count")
+  
+  for (i in 2:length(names(df))) {
+    entityCountPerPattern$Entity[i-1] = names(df)[i]
+    entityCountPerPattern$Count[i-1] = nrow(subset(df, !is.na(df[i])))
+  }
+  return (entityCountPerPattern)
+}
+
+# countMatchesPerRow returns the number of entities per file/row.
+# Counts the number of rows with non-NA values for each file.
+countMatchesPerRow = function (df) {
+  entityCountPerFile <- data.frame(matrix(NA, ncol = 2, nrow = nrow(df)))
+  names(entityCountPerFile) <- c("File","Count")
+  
+  for (i in 1:nrow(df)) {
+    entityCountPerFile$File[i] = df$File[i]
+    entityCountPerFile$Count[i] = length(Filter(Negate(is.na),df[i,2:length(df[i,])]))
+  }
+  return (entityCountPerFile[entityCountPerFile[2]!=0,])
+}
+
+# mergeAllMatchesInLists returns a data frame with all the files and their matches in a single list per file.
+mergeAllMatchesInLists = function (df) {
+  matchesPerFile = rep(list(list()), nrow(df))
+  
+  for (i in 1:nrow(df)) {    
+    matches=as.list(unname(unlist(Filter(Negate(is.na),df[i,2:length(df[i,])]))))
+    matchesPerFile[[i]]=append(matchesPerFile[[i]],matches)
+  }
+  
+  files = df[,1]
+  matches = matchesPerFile
+  
+  allMatches<- data.frame(matrix(NA, ncol = 2, nrow = nrow(df)))
+  names(allMatches) <- c("Files","Matches")
+  
+  allMatches$Files=files
+  allMatches$Matches=matches
+  
+  return (allMatches)
+}
+
+# mergeGoldStandardInLists returns a data frame with all the files and the gold standard matches in a single list per file.
+mergeGoldStandardInLists = function (df) {
+  matchesPerFile = rep(list(list()), nrow(df))
+  
+  for (i in 1:nrow(df)) {    
+    matches=as.list(unlist(Filter(Negate(is.na),df[i,2:length(df)])))
+    matchesPerFile[[i]]=append(matchesPerFile[[i]],matches)
+  }
+  
+  files = df[,1]
+  matches = matchesPerFile
+  
+  allMatches<- data.frame(matrix(NA, ncol = 2, nrow = nrow(df)))
+  names(allMatches) <- c("Files","Matches")
+  
+  allMatches$Files=files
+  allMatches$Matches=matches
+  
+  return (allMatches)
+}
+
+# calculateMetrics calculates precision, recall and f-measure according to a gold standard.
+calculateMetrics = function (matches, matches.gs) {
+  
+  metrics<- data.frame(matrix(NA, ncol = 3, nrow = 1))
+  names(metrics) <- c("Precision","Recall","Fmeasure")
+  
+  numCorrect = 0
+  allAnswers = 0
+  possibleAnswers = 0
+  
+  for (i in 1:nrow(matches)) {    
+    if (length(matches.gs$Matches[[i]])!=0) {
+      l = str_trim(unlist(matches[i,2]))
+      l.gs = unname(unlist(matches.gs[i,2]))
+      
+      intersection = intersect(l, l.gs)
+      
+      numCorrect = numCorrect + length(intersect(l, l.gs))
+      allAnswers = allAnswers + length (l)
+      possibleAnswers = possibleAnswers + length(l.gs)    
+    }
+  }
+  
+  metrics$Precision = numCorrect / allAnswers
+  metrics$Recall = numCorrect / possibleAnswers
+  
+  beta = 1
+  metrics$Fmeasure= ((sqrt(beta)+1) * metrics$Precision * metrics$Recall) / ((sqrt(beta)*metrics$Precision) + metrics$Recall)
+  
+  return(metrics)
+}
+
+# We are going to use the Movie review data version 2.0, created by Bo Pang and Lillian Lee.
+
+# Once unzipped, the data splits the different documents into positive and negative opinions. 
+# In this script we are going to use the positive opinions located in ./txt_sentoken/pos.
+
+# We are only going to load the first 500 reviews.
+source.pos = DirSource("./review_polarity/txt_sentoken/pos", encoding = "UTF-8")
+corpus = Corpus(source.pos)
+corpus = corpus[0:500]
+
+# Let’s take a look at the document in the first entry.
+corpus[[1]]
+
+# We just apply the getAnnotationsFromDocument function to every document in the corpus using lapply.
+
+# This step may take long depending on the size of the corpus and on the annotations that we want to identify.
+annotations = lapply(corpus, getAnnotationsFromDocument)
+
+# We can create AnnotatedPlainTextDocuments that attach the annotations to the document and store the
+# annotated corpus in another variable (since we destroy the corpus metadata).
+corpus.tagged = Map(getAnnotatedPlainTextDocument, corpus, annotations)
+
+# And we can also store all the annotations inline with the text and store the annotated corpus in another variable
+# (since we destroy the corpus metadata).
+corpus.taggedText = Map(getAnnotatedMergedDocument, corpus, annotations)
+
+# We define a query to obtain (some) actor names in DBpedia.
+prefixT <- c("skos","http://www.w3.org/2004/02/skos/core#")
+
+sparql_prefixT <- "
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+"
+
+# FilmDirector110088200
+# Actor109765278
+qT <- paste(sparql_prefixT,"
+SELECT DISTINCT ?label where {
+  ?director a <http://dbpedia.org/class/yago/FilmDirector110088200> .
+  ?director rdfs:label ?label .
+} 
+LIMIT 10000
+OFFSET 0
+")
+
+# Let’s evaluate the query against the SPARQL endpoint.
+endpointT <- "http://dbpedia.org/sparql"
+optionsT=""
+
+directors <- SPARQL(endpointT,qT,ns=prefixT,extra=optionsT)$results
+
+# And take a look at the output of the query.
+length(directors)
+directors[1:30]
+
+# We need to clean the output of the query. We need to:
+
+# Remove everything out of the quotes
+# Remove parentheses
+# Remove duplicates
+# Remove “.” for the regular expression
+# Put all letters in non-capital
+directors.2 = lapply(directors, function(x) strsplit(x,'"')[[1]][2])
+directors.3 = lapply(directors.2, function(x) strsplit(x,' \\(')[[1]][1])
+director.names = unique(directors.3)
+director.names = lapply(director.names, gsub, pattern="\\.", replacement=" ")
+director.names = lapply(director.names, tolower)
+length(director.names)
+
+head(director.names,10)
+
+# Now we write the gazetteer to a file.
+write.table(unlist(director.names), file = "gazetteer.txt", row.names = F, col.names = F, na="", sep=";")
+
+# We include spaces at both sides of the names, to only match full words.
+# And we detect the patterns in the corpus.
+pattern.an = lapply(director.names, function(x) return(paste(" ",x," ",sep = "")))
+pattern.an=unlist(pattern.an)
+
+matches.an = detectPatternsInCorpus(corpus, pattern.an)
+
+# Let’s see how many patterns we have found per file.
+countMatchesPerRow(matches.an) 
+
+# Let’s see which patterns we have found.
+countColum = countMatchesPerColumn(matches.an) 
+countColum[countColum$Count != 0,]
+
+# Now we write the results to a file.
+write.table(matches.an, file = "allEntitiesGazetteer.csv", row.names = F, na="", sep=";")
+
+# Let’s put all matches in a list for comparison with a gold standard.
+allMatches = mergeAllMatchesInLists(matches.an)
+head(allMatches,10)
+
+# Now we load the gold standard and put all gold standard matches in a list for comparison.
+goldStandard = read.table(file = "goldStandard.csv", quote = "", na.strings=c(""), colClasses="character", sep=";")
+
+allMatchesGold = mergeGoldStandardInLists(goldStandard)
+head(allMatchesGold,10)
+
+# Finally, we calculate the metrics.
+metrics = calculateMetrics(allMatches, allMatchesGold)
+metrics
+
+# What advantages and disadvantages have you found when using a gazetteer for named entity recognition? 
+
+# The main advantage is the high amount of entities that can be extracted from sources like dbpedia, for example director
+# The disadvantage is that the gazetteer is slow, and it can't recognise new entities that doesn't appear in 
+# knowledge bases as dbpedia. The analisys depends on 3rd party systems, such as dbpedia.
+
+```
