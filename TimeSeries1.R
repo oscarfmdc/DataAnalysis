@@ -1,3 +1,6 @@
+library(TSA)
+library(forecast)
+
 ## package TSA, forecast
 # time series bubbly, ggb, a.ts, co2, electricity, lynx, NAO.ts
 bubbly=ts(tsdata$bubbly,start=c(1999,1), end=c(2005,12),frequency=12)
@@ -14,6 +17,7 @@ data(co2)
 str(co2)
 plot(co2)
 data
+
 ## package forecast, fancy representation
 tsdisplay(ggb, plot.type="partial")
 tsdisplay(ggb, plot.type="scatter")
@@ -21,9 +25,11 @@ tsdisplay(ggb, plot.type="spectrum")
 
 ### Box Cox transformation, two datasets where logarithmic transformation is useful: a.ts and electricity
 BoxCox.lambda(a.ts,lower=0, upper=2)
+
 ## lambda=0 is a logarithmic transformation
 tsdisplay(a.ts, plot.type="scatter")
 tsdisplay(log(a.ts), plot.type="scatter")
+
 ## with electricity
 data(electricity)
 str(electricity)
@@ -32,7 +38,6 @@ tsdisplay(electricity, plot.type="scatter")
 tsdisplay(log(electricity), plot.type="scatter")
 la.ts=log(a.ts)
 lelectr=log(electricity)
-
 
 #### Exponential Smoothing
 ## Simple exponential smoothing is used with series without trend and seasonality
@@ -62,10 +67,10 @@ plot(alisim3prim,forecast3prim)
 #### Decomposition of time series, signals extraction, additive decomposition
 decomp1=decompose(a.ts)
 plot(decomp1)
+
 ### Decomposition of time series, multiplicative decomposition
 decomp1prim=decompose(a.ts,type="multiplicative")
 plot(decomp1prim)
-
 
 ## The random part of the decomposition should show no pattern, should look like a white noise. 
 ## Let's see what a white noise looks like, doing some simulation
@@ -84,7 +89,10 @@ stl1=stl(co2, s.window="periodic", robust=TRUE)
 stl2=stl(la.ts, s.window="periodic", robust=TRUE)
 plot(stl1)
 plot(stl2)
-## In method for forecasting, we can choose c("naive", "ets", "arima", "rwdrift"). This is a model for the random ## part: ets=exponential smoothing, rwdrift=random walk with drift. In this particular example the results are ## almost the same.
+
+## In method for forecasting, we can choose c("naive", "ets", "arima", "rwdrift"). 
+# This is a model for the random ## part: ets=exponential smoothing, rwdrift=random walk 
+# with drift. In this particular example the results are ## almost the same.
 fcst=forecast(stl1, method="naive")
 plot(fcst)
 fcst1=forecast(stl1, method="arima")
@@ -93,8 +101,10 @@ fcst2=forecast(stl1, method="rwdrift")
 plot(fcst2)
 fcst2$mean
 fcst3=forecast(stl2, method="arima")
+
 ## in the logarithmic scale
- plot(fcst3)
+plot(fcst3)
+
 ## in the original scale
 fcst4=stlf(a.ts,method="arima",lambda=BoxCox.lambda(a.ts))
 plot(fcst4)
@@ -104,23 +114,24 @@ stl1_remainder=stl1$time.series[,3]
 plot(stl1_remainder)
 acf2(stl1_remainder)
 
-
 ### Exploring seasonality (declared frequency must be >1), seasonplot in package forecast
 monthplot(a.ts)
 seasonplot(a.ts)
 monthplot(bubbly)
 monthplot(ggb)
 
-# Spectrum of the series, package astsa: it shows the lowest frequency having the highest contribution to the variation of the process.
+# Spectrum of the series, package astsa: it shows the lowest frequency having the highest 
+# contribution to the variation of the process.
 # It may help us in determining the period of the series, if any.
 mvspec(a.ts)
+
 # it shows clearly the maximum at 1, as we have declared the frequency=12, the period is 1/1=1 year.
 ## other data set, annual data
 data(lynx)
- mvspec(lynx)
+mvspec(lynx)
+ 
 ## the maximum is at 0.1, the period is 1/0.1=10 years (frequency=1 declared in the command ts)
 
-#### 
 ## Exploring the autocorrelation structure of time series
 ## clear nonstationarity probably due to seasonality (among other causes)
 par(mfrow=c(3,1))
@@ -132,8 +143,6 @@ pacf(log(lynx))
 plot(ggb)
 acf(ggb)
 pacf(ggb)
-###### 
-
 
 ## Differenciation to achieve stationarity: lynx (log, d=1, D=1), ggb (no need for log, d=1, D=1)
 ## We plot them, log(lynx)
@@ -146,30 +155,28 @@ plot(diff(diff(log(lynx),10)))
 plot(ggb)
 plot(diff(ggb,12))
 plot(diff(diff(ggb,12)))
+
 # exploring ggb
 tsdisplay(ggb, plot.type="scatter")
 tsdisplay(diff(ggb), plot.type="scatter")
 tsdisplay(diff(diff(ggb),12), plot.type="scatter")
 
-##bubbly
+# bubbly
 par(mfrow=c(2,1))
 plot(bubbly)
 plot(diff(bubbly,12))
 
 ## Stationary tests
-## Augmented Dickey-Fuller test (package tseries) is applied on the seasonal adjusted series to see if regular differenciation is needed to achieve stationarity.
+## Augmented Dickey-Fuller test (package tseries) is applied on the seasonal adjusted series to
+# see if regular differenciation is needed to achieve stationarity.
 
 ## log(lynx)
 adf.test(diff(log(lynx),10))
 adf.test(diff(diff(log(lynx),10)))
 
-
 ## ggb
 adf.test(diff(ggb,12))
 adf.test(diff(diff(ggb,12)))
 
-
 ## bubbly, D=1
 adf.test(diff(bubbly,12))
-
-
